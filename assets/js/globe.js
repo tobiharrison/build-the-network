@@ -1,0 +1,32 @@
+/* Globe.GL renderer with a dependency-free accessible 2D fallback. */
+'use strict';
+window.NetworkGlobe=class {
+ constructor(onStation){this.onStation=onStation;this.nodes=[];this.routes=[];this.region='Global View';this.rings=true;this.lines=true;this.paused=false;this.reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;this.twoD=false;this.stage=document.getElementById('globe');this.map=document.getElementById('fallback');this.init();}
+ init(){try{
+  if(!window.Globe||!document.createElement('canvas').getContext('webgl'))throw Error('No WebGL');
+  this.globe=Globe()(this.stage).backgroundColor('rgba(0,0,0,0)').globeImageUrl('assets/images/earth-night.jpg').bumpImageUrl('assets/images/earth-topology.png').showAtmosphere(true).atmosphereColor('#00baff').atmosphereAltitude(.16).pointLat('lat').pointLng('lng').pointColor(()=>'#42e6ff').pointAltitude(.012).pointRadius(.26).pointLabel(s=>this.safe(s.name+' · '+s.city+', '+s.country)).onPointClick(s=>this.onStation(s)).htmlLat('lat').htmlLng('lng').htmlAltitude(.025).htmlElement(s=>{const b=document.createElement('button');b.className='tower-marker';b.setAttribute('aria-label',s.name);b.innerHTML='<svg viewBox="0 0 24 28" aria-hidden="true"><path d="M12 9L5 26H19L12 9ZM8 20H16M9 16H15M12 9V3M5 4Q0 9 5 14M19 4Q24 9 19 14M8 6Q5 9 8 12M16 6Q19 9 16 12" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';b.addEventListener('click',()=>this.onStation(s));return b;}).ringLat('lat').ringLng('lng').ringColor(()=>t=>`rgba(0,212,255,${1-t})`).ringMaxRadius(s=>s.radius_km/6371*180/Math.PI).ringPropagationSpeed(1.4).ringRepeatPeriod(2000).arcStartLat('startLat').arcStartLng('startLng').arcEndLat('endLat').arcEndLng('endLng').arcColor(()=>['#00d4ff','#d4af37']).arcDashLength(.35).arcDashGap(1).arcDashAnimateTime(2200).arcStroke(.4);
+  const controls=this.globe.controls();controls.autoRotate=!this.reduced;controls.autoRotateSpeed=.35;controls.minDistance=140;controls.maxDistance=650;controls.enablePan=false;
+  this.globe.pointOfView({lat:12,lng:15,altitude:2.2},0);
+  this.resizeObserver=new ResizeObserver(()=>this.resize());this.resizeObserver.observe(this.stage.parentElement);this.resize();
+  this.stage.querySelector('canvas')?.addEventListener('webglcontextlost',e=>{e.preventDefault();this.use2D(true)});
+ }catch(err){this.use2D(true);}document.getElementById('globe-loading').hidden=true;}
+ safe(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+ resize(){if(this.globe&&!this.twoD){const r=this.stage.parentElement.getBoundingClientRect();this.globe.width(r.width).height(r.height);}}
+ use2D(force){this.twoD=force===undefined?!this.twoD:force;this.stage.hidden=this.twoD;this.map.hidden=!this.twoD;document.getElementById('quality').setAttribute('aria-pressed',String(this.twoD));document.getElementById('quality').textContent=this.twoD?'3D':'2D';if(this.globe){this.twoD?this.globe.pauseAnimation():this.globe.resumeAnimation();this.resize();}this.render();}
+ focus(region){this.region=region;const coords={'Global View':[10,0],'Africa':[2,20],'Europe':[50,15],'Asia':[28,95],'North America':[35,-100],'South America':[-15,-60],'Oceania':[-25,135]};if(this.globe&&!this.twoD){const [lat,lng]=coords[region]||[10,0];this.globe.pointOfView({lat,lng,altitude:region==='Global View'?2.4:1.7},this.reduced?0:900);}this.render();}
+ set(data){this.nodes=data.stations;this.routes=data.connections;this.scenario=data.impact.scenario;this.render();if(this.globe&&!this.twoD){this.globe.pointOfView({lat:+this.scenario.focus_lat,lng:+this.scenario.focus_lng,altitude:+this.scenario.altitude},this.reduced?0:1400);}}
+ setReduced(v){this.reduced=v;this.rotation(this.paused);this.render();}
+ rotation(paused){this.paused=paused;if(this.globe)this.globe.controls().autoRotate=!paused&&!this.reduced;}
+ render(){let visible=this.nodes.filter(s=>this.region==='Global View'||s.region===this.region);const limit=Math.min(this.twoD?300:220,+(this.scenario?.render_limit||220));if(visible.length>limit){const step=visible.length/limit;visible=Array.from({length:limit},(_,i)=>visible[Math.floor(i*step)]);}
+ const lookup=new Map(this.nodes.map(s=>[s.id,s]));const routes=this.routes.map(r=>[lookup.get(+r.from_station_id),lookup.get(+r.to_station_id)]).filter(([a,b])=>a&&b&&(this.region==='Global View'||a.region===this.region||b.region===this.region)).slice(0,50).map(([a,b])=>({startLat:a.lat,startLng:a.lng,endLat:b.lat,endLng:b.lng}));
+ if(this.globe&&!this.twoD){this.globe.pointsData(visible).htmlElementsData(visible.slice(0,8)).ringsData(this.rings&&!this.reduced?visible.slice(0,25):[]).arcsData(this.lines?routes:[]).arcDashAnimateTime(this.reduced?0:2200);}
+ if(this.twoD)this.renderMap(visible,routes);
+ document.getElementById('globe-label').textContent=this.nodes.length?`${this.nodes.length.toLocaleString()} nodes · ${this.region}${this.nodes.length>limit?' · aggregated view':''}`:'A signal starts with you.';
+ }
+ renderMap(nodes,routes){const ns='http://www.w3.org/2000/svg',points=document.getElementById('map-points'),rings=document.getElementById('map-rings'),paths=document.getElementById('map-routes');points.replaceChildren();rings.replaceChildren();paths.replaceChildren();const xy=(lat,lng)=>[(lng+180)/360*1000,(90-lat)/180*500];
+ if(this.lines)routes.forEach(r=>{const [x,y]=xy(r.startLat,r.startLng),[a,b]=xy(r.endLat,r.endLng);const p=document.createElementNS(ns,'path');p.setAttribute('d',`M${x},${y} Q${(x+a)/2},${Math.min(y,b)-45} ${a},${b}`);p.setAttribute('class','map-route');paths.append(p)});
+ nodes.forEach(s=>{const [x,y]=xy(s.lat,s.lng);if(this.rings){const c=document.createElementNS(ns,'circle');c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r',Math.max(5,s.radius_km/40075*1000));c.setAttribute('class','map-ring');rings.append(c)}const c=document.createElementNS(ns,'circle');c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r',3);c.setAttribute('class','map-point');c.setAttribute('tabindex','0');c.setAttribute('role','button');c.setAttribute('aria-label',s.name);c.addEventListener('click',()=>this.onStation(s));c.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();this.onStation(s)}});points.append(c)});
+ }
+ visibility(){if(this.globe&&!this.twoD){document.hidden?this.globe.pauseAnimation():this.globe.resumeAnimation();}}
+ dispose(){this.resizeObserver?.disconnect();if(this.globe)this.globe._destructor();}
+};
